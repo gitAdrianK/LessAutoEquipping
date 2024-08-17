@@ -1,5 +1,7 @@
 ﻿using BehaviorTree;
+using EntityComponent;
 using HarmonyLib;
+using JumpKing;
 using JumpKing.GameManager.MultiEnding;
 using JumpKing.MiscEntities.WorldItems;
 using JumpKing.MiscEntities.WorldItems.Inventory;
@@ -21,6 +23,11 @@ namespace LessAutoEquipping
 
         private static string AssemblyPath { get; set; }
         public static Preferences Preferences { get; private set; }
+
+        private static Type worldItemComp;
+
+        private static Type saveLube;
+        private static MethodInfo removeWorldItem;
 
         [MainMenuItemSetting]
         [PauseMenuItemSetting]
@@ -56,6 +63,16 @@ namespace LessAutoEquipping
             harmony.Patch(
                 giveWINMyRun,
                 prefix: preventEquip);
+
+            worldItemComp = AccessTools.TypeByName("JumpKing.MiscEntities.WorldItems.WorldItemComp");
+            MethodInfo onPickup = worldItemComp.GetMethod("OnPickup", BindingFlags.NonPublic | BindingFlags.Instance);
+            HarmonyMethod preventPickup = new HarmonyMethod(typeof(ModEntry).GetMethod(nameof(PreventPickup)));
+            harmony.Patch(
+                onPickup,
+                prefix: preventPickup);
+
+            saveLube = AccessTools.TypeByName("JumpKing.SaveThread.SaveLube");
+            removeWorldItem = saveLube.GetMethod("RemoveWorldItem");
         }
 
         public static bool PreventEquip(GiveWearableItemNode __instance, ref BTresult __result)
@@ -68,6 +85,32 @@ namespace LessAutoEquipping
             Items item = instance.Field("m_item").GetValue<Items>();
             InventoryManager.AddItemOnce(item);
             __result = BTresult.Success;
+            return false;
+        }
+
+        public static bool PreventPickup(object __instance)
+        {
+            if (!Preferences.ShouldPreventAutoEquip)
+            {
+                return true;
+            }
+            Traverse instance = Traverse.Create(__instance);
+            Traverse gaveItem = instance.Field("gave_item");
+            if (!gaveItem.GetValue<bool>())
+            {
+                instance.Field("m_owner").GetValue<Entity>().Destroy();
+
+                gaveItem.SetValue(true);
+
+                WorldItemState state = instance.Field("m_state").GetValue<WorldItemState>();
+                InventoryManager.AddItem(state.item);
+
+                removeWorldItem.Invoke(null, new object[] { state });
+                if (instance.Field("m_sfx").GetValue<bool>())
+                {
+                    Game1.instance.contentManager.audio.menu.CursorMove.Play();
+                }
+            }
             return false;
         }
 
